@@ -1,0 +1,33 @@
+---
+title: "Elderly Care Analysis"
+author: "Michael"
+date: "November 2, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Healthcare & the Elderly 
+Our question involves disparity in the care for the elderly based on income and racial distrbutrions in California. We will be using spatial analysis to determine if there is a spatial pattern based on the dispersion (or lackthereof) of care facilities based on their bed size/capacity size. 
+
+We will be testing the hypothesis that facility capacity is correlated with income and race. There is also reason to believe that location matters: areas with neighboring low-income, POC populations will correspond with less bed sizes. 
+
+To test this, we will need to test if there is a spatial pattern, and then carry on to run some spatial regression models. 
+
+##Data Prep
+We will start with two basic datasets provided by Jen on the elderly/adult care facilities in CA. 
+
+```{r, include=FALSE}
+library(tidyverse)
+```
+```{r, echo=FALSE}
+adult.res <- read_csv("AdultResidentialFacilities10292017.csv")
+elderly.res <- read_csv("ResidentialElderCareFacility10292017.csv")
+
+```
+Things are looking a little messy, so let's clean up the dataset so we only keep the variables of interest. 
+```{r}
+adult.prep <- adult.res %>%
+  select(`Facility Type`, `Facility Name`, `Facility Administrator`, `Facility Address`, `Facility City`, `Facility State`, `Facility Zip`, Faci)
