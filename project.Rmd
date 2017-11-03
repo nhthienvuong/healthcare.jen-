@@ -21,13 +21,82 @@ We will start with two basic datasets provided by Jen on the elderly/adult care 
 
 ```{r, include=FALSE}
 library(tidyverse)
+library(ggmap)
 ```
 ```{r, echo=FALSE}
-adult.res <- read_csv("AdultResidentialFacilities10292017.csv")
-elderly.res <- read_csv("ResidentialElderCareFacility10292017.csv")
+adult.res <- read_csv("AdultResidentialFacilities10292017.csv", col_names = TRUE)
+elderly.res <- read_csv("ResidentialElderCareFacility10292017.csv", col_names = TRUE)
 
 ```
 Things are looking a little messy, so let's clean up the dataset so we only keep the variables of interest. 
-```{r}
+```{r, eval=F}
 adult.prep <- adult.res %>%
-  select(`Facility Type`, `Facility Name`, `Facility Administrator`, `Facility Address`, `Facility City`, `Facility State`, `Facility Zip`, Faci)
+  select(Type, Name, Administrator, Address, City, State, Zip, `County Name`, Capacity, `License First Date`, Status) %>% 
+  filter(Type == "ADULT RESIDENTIAL" & Status == "LICENSED") 
+
+elderly.prep <- elderly.res %>%
+  select(Type, Name, Administrator, Address, City, State, Zip, `County Name`, Capacity, `License First Date`, Status) %>%
+  filter(Type == "RESIDENTIAL CARE ELDERLY" & Status == "LICENSED")
+
+#Let's join the two 
+care.facilities <- adult.prep %>%
+  full_join(elderly.prep)
+
+write_csv(care.facilities, "facilities.prepped.csv")
+```
+Now we can just load the prepped csv, and begin working on it. 
+* First, we want to get combine the address, city, state, zip into one address 
+* Then we can send that to google maps api to get the geo coordinates for mapping 
+
+```{r}
+care.facilities <- read.csv("facilities.prepped.csv")
+care.facilities$Location <- paste0(care.facilities$Address, ", ", care.facilities$City, ", ", care.facilities$State, care.facilities$Zip)
+
+care.facilitiesA <- care.facilities[1:2500,]
+
+geo <- geocode(location = care.facilitiesA$Location, output="latlon", source="google")
+
+care.facilitiesA$Lat <- geo$lat
+care.facilitiesA$Long <- geo$lon
+```
+Adding in census data. 
+```{r}
+library(leaflet)
+library(tidycensus)
+library(stringr)
+library(sf)
+library(ggplot2)
+library(viridis)
+library(tibble)
+
+census_api_key(Sys.getenv("CENSUS_API_KEY"))
+
+#getting data on median income 
+ca.income <- get_acs(geography = "tract", variables = "B19013_001", state = "CA", geometry = TRUE)
+
+#setting color 
+pal <- colorNumeric(palette = "viridis", 
+                    domain = ca.income$estimate)
+
+
+ca.income %>%
+    st_transform(crs = "+init=epsg:4326") %>%
+    leaflet(width = "100%") %>%
+      addProviderTiles(provider = "CartoDB.Positron") %>%
+      addPolygons(popup = ~ str_extract(NAME, "^([^,]*)"),
+                stroke = FALSE,
+                smoothFactor = 0,
+                fillOpacity = 0.7,
+                color = ~ pal(estimate)) %>%
+      addAwesomeMarkers(data = care.facilitiesA, 
+                 lat = ~Lat,
+                 lng =  ~Long,
+                 label = ~as.character(Name)) %>%
+      addLegend("bottomright", 
+              pal = pal, 
+              values = ~ estimate,
+              title = "Median Home Value",
+              labFormat = labelFormat(prefix = "$"),
+              opacity = 1)
+```
+Okay so for the most part, I figured it out, no idea why there are some corrdinates in like Michigan 
