@@ -19,11 +19,18 @@ To test this, we will need to test if there is a spatial pattern, and then carry
 ##Data Prep
 We will start with two basic datasets provided by Jen on the elderly/adult care facilities in CA. 
 
-```{r, include=FALSE}
+```{r, include=FALSE, echo=FALSE}
 library(tidyverse)
 library(ggmap)
+library(tidycensus)
+
+register_google(key = "AIzaSyDFKaPxRWg92bYqtj2xRjQcVoq-LAgI8dU", account_type = "premium", day_limit = 100000)
+ggmap_credentials()
+
+register_google(key = "AIzaSyDFKaPxRWg92bYqtj2xRjQcVoq-LAgI8dU")
 ```
-```{r, echo=FALSE}
+
+```{r, echo=FALSE, eval=FALSE}
 adult.res <- read_csv("AdultResidentialFacilities10292017.csv", col_names = TRUE)
 elderly.res <- read_csv("ResidentialElderCareFacility10292017.csv", col_names = TRUE)
 
@@ -48,55 +55,97 @@ Now we can just load the prepped csv, and begin working on it.
 * First, we want to get combine the address, city, state, zip into one address 
 * Then we can send that to google maps api to get the geo coordinates for mapping 
 
-```{r}
+```{r, echo=FALSE, eval=FALSE}
 care.facilities <- read.csv("facilities.prepped.csv")
 care.facilities$Location <- paste0(care.facilities$Address, ", ", care.facilities$City, ", ", care.facilities$State, care.facilities$Zip)
 
-care.facilitiesA <- care.facilities[1:2500,]
 
-geo <- geocode(location = care.facilitiesA$Location, output="latlon", source="google")
+geo <- geocode(location = care.facilities$Location, output="latlon", source="google")
 
-care.facilitiesA$Lat <- geo$lat
-care.facilitiesA$Long <- geo$lon
+care.facilities$Lat <- geo$lat
+care.facilities$Long <- geo$lon
 ```
 Adding in census data. 
-```{r}
-library(leaflet)
-library(tidycensus)
-library(stringr)
-library(sf)
-library(ggplot2)
-library(viridis)
-library(tibble)
-
+```{r, eval=FALSE}
 census_api_key(Sys.getenv("CENSUS_API_KEY"))
 
-#getting data on median income 
+care.facilities <- read_csv("care.fac.geo.csv")
+
+
+#getting data based county 
+ca.income.county <- get_acs(geography = "county", variables = "B19013_001", state = "CA", geometry = TRUE)
+```
+
+Mapping
+```{r}
+library(leaflet)
+library(stringr)
+library(sf)
+library(viridis)
+library(viridisLite) 
+
+care.facilities <- read_csv("care.fac.geo.csv")
+
+#getting data on median income, census tract
 ca.income <- get_acs(geography = "tract", variables = "B19013_001", state = "CA", geometry = TRUE)
 
 #setting color 
 pal <- colorNumeric(palette = "viridis", 
                     domain = ca.income$estimate)
 
+getColor <- function(care.facilities) {
+  sapply(care.facilities$Capacity, function(Capacity) {
+  if(Capacity <= 12) {
+    "red"
+  } else if(Capacity >= 13 & Capacity <= 24) {
+    "orange"
+  } else if(Capacity >= 25 & Capacity <=100) {
+    "yellow"
+  } else {
+    "green"
+  } } )
+}
+
 
 ca.income %>%
     st_transform(crs = "+init=epsg:4326") %>%
     leaflet(width = "100%") %>%
-      addProviderTiles(provider = "CartoDB.Positron") %>%
-      addPolygons(popup = ~ str_extract(NAME, "^([^,]*)"),
-                stroke = FALSE,
+      addTiles() %>%
+      addPolygons(stroke= FALSE,
                 smoothFactor = 0,
-                fillOpacity = 0.7,
+                fillOpacity = 0.4,
                 color = ~ pal(estimate)) %>%
-      addAwesomeMarkers(data = care.facilitiesA, 
+      addCircles(data = care.facilities, 
                  lat = ~Lat,
                  lng =  ~Long,
-                 label = ~as.character(Name)) %>%
+                 label = ~as.character(Address),
+                 weight = 2, 
+                 radius = 20,
+                 stroke = TRUE,
+                 fillOpacity = 0.8,
+                 color = getColor(care.facilities)
+                 ) %>%
       addLegend("bottomright", 
               pal = pal, 
               values = ~ estimate,
               title = "Median Home Value",
               labFormat = labelFormat(prefix = "$"),
-              opacity = 1)
+              opacity = 1) %>%
+      addLegend("bottomleft", 
+                colors= c("Red", "Orange", "Yellow", "Green"),
+                labels = c("4-12 Beds", "13-24 Beds", "25-100 Beds", "101+ Beds"),
+                title = "Capacity Size")
+
+
 ```
-Okay so for the most part, I figured it out, no idea why there are some corrdinates in like Michigan 
+Okay so for the most part, I figured it out, no idea why there are some corrdinates in like Michigan. Time to aggregate data for regression analysis. 
+
+What I'm thinking is we can try to map all the points and see what it looks like first. Using circle radius perhaps? Checklist of things: 
+
+* Map of all the locations on top of income 
+* graph of amount of buildings over time - years 
+* If Time: Spatial regression 
+
+```{r}
+#clean up data, 3 values that are not in California 
+
