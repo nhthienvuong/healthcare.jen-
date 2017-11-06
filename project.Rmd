@@ -35,6 +35,7 @@ adult.res <- read_csv("AdultResidentialFacilities10292017.csv", col_names = TRUE
 elderly.res <- read_csv("ResidentialElderCareFacility10292017.csv", col_names = TRUE)
 
 ```
+
 Things are looking a little messy, so let's clean up the dataset so we only keep the variables of interest. 
 ```{r, eval=F}
 adult.prep <- adult.res %>%
@@ -51,11 +52,13 @@ care.facilities <- adult.prep %>%
 
 write_csv(care.facilities, "facilities.prepped.csv")
 ```
+
+
 Now we can just load the prepped csv, and begin working on it. 
 * First, we want to get combine the address, city, state, zip into one address 
 * Then we can send that to google maps api to get the geo coordinates for mapping 
 
-```{r, echo=FALSE, eval=FALSE}
+```{r, eval=FALSE}
 care.facilities <- read.csv("facilities.prepped.csv")
 care.facilities$Location <- paste0(care.facilities$Address, ", ", care.facilities$City, ", ", care.facilities$State, care.facilities$Zip)
 
@@ -65,15 +68,21 @@ geo <- geocode(location = care.facilities$Location, output="latlon", source="goo
 care.facilities$Lat <- geo$lat
 care.facilities$Long <- geo$lon
 ```
+
 Adding in census data. 
 ```{r, eval=FALSE}
 census_api_key(Sys.getenv("CENSUS_API_KEY"))
 
 care.facilities <- read_csv("care.fac.geo.csv")
 
+#get variables 
+census_var <- load_variables(2015, "acs5", cache = TRUE)
+
+test <- get_acs(geography = "tract", variables = "B06012_001E", state="CA", geometry = TRUE)
+
 
 #getting data based county 
-ca.income.county <- get_acs(geography = "county", variables = "B19013_001", state = "CA", geometry = TRUE)
+ca.income.county <- get_acs(geography = "county", variables = "B06011_001E", state = "CA", geometry = TRUE)
 ```
 
 Mapping
@@ -87,11 +96,13 @@ library(viridisLite)
 care.facilities <- read_csv("care.fac.geo.csv")
 
 #getting data on median income, census tract
-ca.income <- get_acs(geography = "tract", variables = "B19013_001", state = "CA", geometry = TRUE)
+ca.house.income <- get_acs(geography = "tract", variables = "B19013_001", state = "CA", geometry = TRUE)
+
+ca.home.value <- get_acs(geography = "tract", variables = "B25077_001", state = "CA", geometry = TRUE)
 
 #setting color 
 pal <- colorNumeric(palette = "viridis", 
-                    domain = ca.income$estimate)
+                    domain = ca.house.income$estimate)
 
 getColor <- function(care.facilities) {
   sapply(care.facilities$Capacity, function(Capacity) {
@@ -107,18 +118,18 @@ getColor <- function(care.facilities) {
 }
 
 
-ca.income %>%
+ca.map <- ca.house.income %>%
     st_transform(crs = "+init=epsg:4326") %>%
     leaflet(width = "100%") %>%
       addTiles() %>%
       addPolygons(stroke= FALSE,
                 smoothFactor = 0,
-                fillOpacity = 0.4,
+                fillOpacity = 0.7,
                 color = ~ pal(estimate)) %>%
       addCircles(data = care.facilities, 
                  lat = ~Lat,
                  lng =  ~Long,
-                 label = ~as.character(Address),
+                 label = ~as.character(Name),
                  weight = 2, 
                  radius = 20,
                  stroke = TRUE,
@@ -128,7 +139,7 @@ ca.income %>%
       addLegend("bottomright", 
               pal = pal, 
               values = ~ estimate,
-              title = "Median Home Value",
+              title = "Household Income",
               labFormat = labelFormat(prefix = "$"),
               opacity = 1) %>%
       addLegend("bottomleft", 
@@ -147,5 +158,76 @@ What I'm thinking is we can try to map all the points and see what it looks like
 * If Time: Spatial regression 
 
 ```{r}
-#clean up data, 3 values that are not in California 
+#save the map 
+library(htmlwidgets)
 
+saveWidget(ca.map, "ca.map.html", selfcontained = FALSE)
+
+ca.map
+```
+
+Stuff over time: 
+```{r}
+library(lubridate)
+
+care.facilities$date <- mdy(care.facilities$License.First.Date)
+
+care.facilities$year <- year(care.facilities$date)
+
+levels <- c(-Inf, 12, 25, 100, Inf)
+labels <- c("small", "medium", "large", "x-large")
+
+care.facilities$size <- cut(care.facilities$Capacity, levels, labels)
+
+#time to re-organize data for graphing 
+growth <- care.facilities %>%
+  select(size, year) %>%
+  group_by(year) %>%
+  count(size)
+
+growth.plot <- ggplot(growth, aes(x=year, y=n, color=size)) + 
+  geom_line()
+
+growth.plot <- growth.plot + ggtitle("Growth of Care Facilities, CA") +
+  xlab("Year") +
+  ylab("Facilities Opened")
+
+growth.plot
+```
+Okay, so now we need to prepare data for spatial regression. We can accomplishment this by aggregating the data in a way that satisfies our questions: Is facility size influenced by income? Or maybe race? 
+
+To do this, let's create a dummy variable that gives us a "1" if the facility is small, and a "0" if it is not. The amount of small facilities in a census blocked will be our dependent variable in our regression models. 
+
+```{r}
+care.facilities <- care.facilities %>%
+  mutate(dummy = ifelse(size == "small", 1, 0))
+
+#create a new csv with just the variables we need 
+
+care.regression <- care.facilities %>%
+  select(Name, City, Lat, Long, dummy)
+
+write.csv(care.regression, "care.regression.csv")
+
+#playing around with the data 
+care.reg.agg <- care.regression %>%
+  select(City, dummy) %>%
+  group_by(City) %>%
+  summarise(small = sum(dummy == 1))
+
+#It might be possible to group by city and do a proportion? 
+care.city <- care.facilities %>%
+  select(City, size) %>%
+  group_by(City) %>%
+  summarise(small = sum(size == "small"),
+            other = sum(size != "small"),
+            ratio = small/other)
+
+care.city.measure <- care.facilities %>%
+  select(City, size) %>%
+  group_by(City) %>%
+  count(size)
+
+ca.house.income <- get_acs(geography = "tract", variables = "B19013_001", state = "CA", geometry = TRUE)
+
+```
